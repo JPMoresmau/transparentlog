@@ -1,0 +1,8 @@
+[package]
+name = "transparentlog_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust-crypto = "0.2.36"
+num = "0.4.0"
