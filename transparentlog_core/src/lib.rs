@@ -28,26 +28,20 @@ pub trait TransparentLog<T> {
 pub fn tree_sizes<LogSize: Integer + Copy>(size: LogSize) -> Vec<LogSize> {
     let mut v=vec![];
     let mut sz=size;
-    let mut lg=LogSize::one();
+    let mut height=LogSize::one();
     let two=LogSize::one().add(LogSize::one());
     if sz>LogSize::zero() {
-        loop {
-            v.push(sz);
-            sz=sz.div(two);
-            lg=lg*two;
-            if lg>=size {
-                break;
+        v.push(sz);
+        while height<size && sz>LogSize::zero(){
+            if sz.is_one(){
+                sz=LogSize::zero();
+            } else {
+                sz=sz.div(two);
             }
-        } 
-        let mut maxs=vec![LogSize::one()];
-        let mut height=LogSize::one();
-        while height<size{
+            v.push(sz);
             height=height*two;
-            maxs.push(height);
         }
-        while v.len()<maxs.len(){
-            v.push(LogSize::zero());
-        }
+        
     }
 
     v
@@ -91,24 +85,14 @@ fn proof_step<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, 
 pub fn prefix_proof_positions<LogSize: Integer + Copy + Hash>(size1: LogSize, size2: LogSize) -> HashSet<(LogHeight,LogSize)>{
     assert!(size1>LogSize::zero());
     assert!(size1<size2);
-    
-    /*let sizes1=tree_sizes(size1);
-    let mut proof=HashSet::new();
-    let two=LogSize::one().add(LogSize::one());
-    for (ix,sz) in sizes1.into_iter().enumerate() {
-        if sz.mod_floor(&two).is_zero() {
-            proof.insert((ix,sz));
-        }
-    }
-    let sizes2=tree_sizes(size2);
 
-    proof*/
     let mut proof = proof_positions(size1,size2);
     proof.extend(&proof_positions(size1-LogSize::one(),size2));
     let two=LogSize::one().add(LogSize::one());
     let sizes2=tree_sizes(size2);
+    let m=sizes2.len()-1;
     for (ix,sz) in sizes2.into_iter().enumerate() {
-        if sz.mod_floor(&two).is_one() {
+        if ix<m && sz.mod_floor(&two).is_one() {
             proof.insert((ix,sz-LogSize::one()));
             break;
         }
@@ -117,85 +101,24 @@ pub fn prefix_proof_positions<LogSize: Integer + Copy + Hash>(size1: LogSize, si
 }
 
 pub fn verify<LogSize: Integer + Copy + Hash>(tree:&(LogSize,String),record:&(LogSize,String), proofs: &HashMap<(LogHeight,LogSize),String>) -> bool {
-    let mut sizes=tree_sizes(tree.0);
+    let sizes=tree_sizes(tree.0);
     if sizes.is_empty(){
         return false;
     }
-    /*let mut maxs=vec![LogSize::one()];
-    let mut height=LogSize::one();
-    let two=LogSize::one().add(LogSize::one());
-    while height<tree.0{
-        height=height*two;
-        maxs.push(height);
-    }
-    while sizes.len()<maxs.len(){
-        sizes.push(LogSize::zero());
-    }*/
     let mut proofs2=proofs.clone();
     proofs2.insert((0,record.0),record.1.clone());
-    let h=add_hash(sizes.len()-1,LogSize::zero(),&proofs2,&sizes);
-    //calc_hash(0,record.0, tree.0, &sizes, &proofs, &record.1);
-    //println!("{h}");
-    h==tree.1
+    tree.1==add_hash(sizes.len()-1,LogSize::zero(),&proofs2,&sizes)
 }
 
-fn calc_hash<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, size: LogSize, sizes: &[LogSize], proofs: &HashMap<(LogHeight,LogSize),String>, hash: &str) -> String {
-    let two=LogSize::one().add(LogSize::one());
-    let mut hasher = Sha256::new();
-   
-    if index.mod_floor(&two).is_zero() {
-        if index<size-LogSize::one(){
-            hasher.input_str(&format!("{}{}",hash,proofs.get(&(level,index +LogSize::one())).unwrap()));
-        } else {
-            let mut new_level=level;
-            let mut new_index=index+LogSize::one();
-            while new_level>0 {
-                new_level-=1;
-                new_index=new_index*two;
-                if (new_index as LogSize) < sizes[new_level]{
-                    hasher.input_str(&format!("{}{}",hash,proofs.get(&(new_level,new_index)).unwrap()));
-                    break;
-                }
-            }
-        }
-    } else {
-        /*if size==LogSize::one(){
-            return hash.into();
-        }*/
-        hasher.input_str(&format!("{}{}",proofs.get(&(level,index - LogSize::one())).unwrap(),hash));
-    }
-    let hash2=hasher.result_str();
-    if level<sizes.len()-1{
-        calc_hash(level+1, index/two, size/two, sizes, proofs,&hash2)
-    } else {
-        hash2
-    }
-}
 
 pub fn verify_tree<LogSize: Integer + Copy + Hash + Debug>(tree:&(LogSize,String), proofs: &HashMap<(LogHeight,LogSize),String>) -> bool {
-    let mut sizes=tree_sizes(tree.0);
+    let sizes=tree_sizes(tree.0);
     if sizes.is_empty(){
         return false;
     }
-    println!("{:?}",sizes);
-    //let mut r=vec![];
-
-    /*let mut maxs=vec![LogSize::one()];
-    let mut height=LogSize::one();
-    let two=LogSize::one().add(LogSize::one());
-    while height<tree.0{
-        height=height*two;
-        maxs.push(height);
-    }
-    while sizes.len()<maxs.len(){
-        sizes.push(LogSize::zero());
-    }*/
-    println!("{:?}",sizes);
-    let h=add_hash(sizes.len()-1,LogSize::zero(),proofs,&sizes);
-    h==tree.1
+    tree.1==add_hash(sizes.len()-1,LogSize::zero(),proofs,&sizes)
 }
 
-//, hashes: &mut Vec<String>
 fn add_hash<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, proofs: &HashMap<(LogHeight,LogSize),String>, sizes: &[LogSize]) -> String{
     if index<sizes[level] {
         if let Some(h) = proofs.get(&(level,index)){
@@ -246,31 +169,6 @@ impl <T> InMemoryLog<T> {
         }
     }
 
-    /*fn proof_step(&self, level: LogHeight, index: usize, size: LogSize, proof: &mut Vec<(LogHeight,LogSize,String)>) {
-        let v=self.hashes.get(level).unwrap();
-        if index % 2 == 0 {
-            if index<size as usize -1{
-                proof.push((level,index as LogSize +1,v[index+1].clone()));
-            } else {
-                let mut new_level=level;
-                let mut new_index=index+1;
-                while new_level>0 {
-                    new_level-=1;
-                    new_index*=2;
-                    let v2=self.hashes.get(new_level).unwrap();
-                    if new_index<v2.len(){
-                        proof.push((new_level,new_index as LogSize,v2[new_index].clone()));
-                        break;
-                    }
-                }
-            }
-        } else {
-            proof.push((level,index as LogSize -1,v[index-1].clone()));
-        }
-        if level<self.hashes.len()-1{
-            self.proof_step(level+1, index/2, size/2, proof);
-        }
-    }*/
 }
 
 impl <T:Display> TransparentLog<T> for InMemoryLog<T> {
@@ -305,16 +203,6 @@ impl <T:Display> TransparentLog<T> for InMemoryLog<T> {
         
         (self.data.len(), r.pop().unwrap_or_default())
     }
-
-    //fn record_proof(&self, index: Self::LogSize, size: Self::LogSize) -> HashMap<(LogHeight,Self::LogSize),String>{
-        /*let mut proof=vec![];
-        if self.hashes.is_empty(){
-            return proof;
-        }
-        self.proof_step(0, index as usize, size, &mut proof);
-        proof*/
-    //    proof_positions(index, size).into_iter().map(|(r,i)| ((r,i),self.hashes[r][i].clone())).collect()
-    //}
 
     fn get(&self, index: Self::LogSize) -> Option<&T> {
         self.data.get(index)
@@ -450,18 +338,21 @@ mod tests {
     fn test_tree_sizes(){
         assert!(tree_sizes(0_u64).is_empty());
         assert_eq!(vec![1],tree_sizes(1_u64));
-        assert_eq!(vec![2,0],tree_sizes(2_u64));
+        assert_eq!(vec![2,1],tree_sizes(2_u64));
         assert_eq!(vec![3,1,0],tree_sizes(3_u64));
-        assert_eq!(vec![4,2,0],tree_sizes(4_u64));
+        assert_eq!(vec![4,2,1],tree_sizes(4_u64));
         assert_eq!(vec![5,2,1,0],tree_sizes(5_u64));
         assert_eq!(vec![6,3,1,0],tree_sizes(6_u64));
         assert_eq!(vec![7,3,1,0],tree_sizes(7_u64));
-        assert_eq!(vec![8,4,2,0],tree_sizes(8_u64));
+        assert_eq!(vec![8,4,2,1],tree_sizes(8_u64));
         assert_eq!(vec![9,4,2,1,0],tree_sizes(9_u64));
         assert_eq!(vec![10,5,2,1,0],tree_sizes(10_u64));
         assert_eq!(vec![11,5,2,1,0],tree_sizes(11_u64));
         assert_eq!(vec![12,6,3,1,0],tree_sizes(12_u64));
         assert_eq!(vec![13,6,3,1,0],tree_sizes(13_u64));
+        assert_eq!(vec![14,7,3,1,0],tree_sizes(14_u64));
+        assert_eq!(vec![15,7,3,1,0],tree_sizes(15_u64));
+        assert_eq!(vec![16,8,4,2,1],tree_sizes(16_u64));
     }
 
     #[test]
