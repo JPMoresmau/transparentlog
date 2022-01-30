@@ -3,28 +3,77 @@ use std::fmt::{Display};
 
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
-use num::Integer;
+use num::{Integer,Zero};
 use std::hash::Hash;
 use std::fmt::Debug;
 type LogHeight = usize;
-//type LogSize = u64;
 
-
+// Transparent log Trait
 pub trait TransparentLog<T> {
-    type LogSize: Integer;
+    // The type used to represent the log size
+    type LogSize: Integer + Copy + Hash;
 
-    fn append(&mut self, record: T) -> Self::LogSize;
+    // Append a new record to the log and return its index
+    fn append(&mut self, record: T, hash: String) -> Self::LogSize;
 
+    // Get the latest log size and root hash
     fn latest(&self) -> (Self::LogSize,String);
 
-    //fn record_proof(&self, index: Self::LogSize, size: Self::LogSize) -> HashMap<(LogHeight,Self::LogSize),String>;
-
+    // Retrieve a log entry by its index
     fn get(&self, index: Self::LogSize) -> Option<&T>;
 
+    // Return the requested proofs from the log
     fn proofs<I>(&self, positions: I) -> HashMap<(LogHeight,Self::LogSize),String>
         where I: Iterator<Item=(LogHeight,Self::LogSize)>;
 }
 
+// Client to a TransparentLog, keeping track of the latest log verified
+pub struct LogClient<T,TL: TransparentLog<T>> {
+    pub latest: (TL::LogSize,String),
+}
+
+impl <T,TL: TransparentLog<T>> LogClient<T,TL> {
+    // new instance connecting to a log for the first time
+    pub fn new(log: &TL) -> Self {
+        Self{latest:log.latest()}
+    }
+
+    // Open a new client with an existing latest verification
+    pub fn open(latest: (TL::LogSize,String)) -> Self {
+        Self{latest}
+    }
+
+    // Check a given index + hash is contained in the given log, using the stored latest verification if possible or updating the cache if needed
+    pub fn check_record(&mut self, log: &TL, record: &(TL::LogSize, String)) -> bool {
+        if record.0>=self.latest.0 {
+            let l2=log.latest();
+             
+            if self.latest.0>TL::LogSize::zero(){
+                let v=prefix_proof_positions(self.latest.0, l2.0);
+                let proofs=log.proofs(v.into_iter());
+                if !verify_tree(&self.latest,&proofs){
+                    return false;
+                }
+                if !verify_tree(&l2,&proofs){
+                    return false;
+                }
+            }
+            self.latest= l2;
+        }
+       let v= proof_positions(record.0,self.latest.0);
+       let proofs=log.proofs(v.into_iter());
+       verify(&self.latest,record,&proofs)
+    }
+}
+
+// Hash a given record via its Display instance
+pub fn hash<T: Display>(record: &T) -> String {
+    let mut hasher = Sha256::new();
+    hasher.input_str(&format!("{}",record));
+    hasher.result_str()
+}
+
+// Return the level sizes for each level of the tree
 pub fn tree_sizes<LogSize: Integer + Copy>(size: LogSize) -> Vec<LogSize> {
     let mut v=vec![];
     let mut sz=size;
@@ -47,6 +96,7 @@ pub fn tree_sizes<LogSize: Integer + Copy>(size: LogSize) -> Vec<LogSize> {
     v
 }
 
+// Calculate the proof position needed to assert the record at the given index is present in a log of the given size
 pub fn proof_positions<LogSize: Integer + Copy + Hash>(index: LogSize, size: LogSize) -> HashSet<(LogHeight,LogSize)>{
     let sizes=tree_sizes(size);
     let mut proof=HashSet::new();
@@ -57,6 +107,7 @@ pub fn proof_positions<LogSize: Integer + Copy + Hash>(index: LogSize, size: Log
     proof
 }
 
+// Calculate one level of proof
 fn proof_step<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, size: LogSize, sizes: &[LogSize], proof: &mut HashSet<(LogHeight,LogSize)>) {
     let two=LogSize::one().add(LogSize::one());
     if index.mod_floor(&two).is_zero() {
@@ -82,6 +133,7 @@ fn proof_step<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, 
     }
 }
 
+// Calculate the proof positions needed to assert a tree of size1 is a prefix of a tree of size 2
 pub fn prefix_proof_positions<LogSize: Integer + Copy + Hash>(size1: LogSize, size2: LogSize) -> HashSet<(LogHeight,LogSize)>{
     assert!(size1>LogSize::zero());
     assert!(size1<size2);
@@ -100,6 +152,7 @@ pub fn prefix_proof_positions<LogSize: Integer + Copy + Hash>(size1: LogSize, si
     proof
 }
 
+// Verify that a given record belongs to the given tree, using the proofs provided
 pub fn verify<LogSize: Integer + Copy + Hash>(tree:&(LogSize,String),record:&(LogSize,String), proofs: &HashMap<(LogHeight,LogSize),String>) -> bool {
     let sizes=tree_sizes(tree.0);
     if sizes.is_empty(){
@@ -107,19 +160,20 @@ pub fn verify<LogSize: Integer + Copy + Hash>(tree:&(LogSize,String),record:&(Lo
     }
     let mut proofs2=proofs.clone();
     proofs2.insert((0,record.0),record.1.clone());
-    tree.1==add_hash(sizes.len()-1,LogSize::zero(),&proofs2,&sizes)
+    tree.1==calc_hash(sizes.len()-1,LogSize::zero(),&proofs2,&sizes)
 }
 
-
-pub fn verify_tree<LogSize: Integer + Copy + Hash + Debug>(tree:&(LogSize,String), proofs: &HashMap<(LogHeight,LogSize),String>) -> bool {
+// Verify that the tree is correct with the proofs provided
+pub fn verify_tree<LogSize: Integer + Copy + Hash>(tree:&(LogSize,String), proofs: &HashMap<(LogHeight,LogSize),String>) -> bool {
     let sizes=tree_sizes(tree.0);
     if sizes.is_empty(){
         return false;
     }
-    tree.1==add_hash(sizes.len()-1,LogSize::zero(),proofs,&sizes)
+    tree.1==calc_hash(sizes.len()-1,LogSize::zero(),proofs,&sizes)
 }
 
-fn add_hash<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, proofs: &HashMap<(LogHeight,LogSize),String>, sizes: &[LogSize]) -> String{
+// Calculate the hash of a given level or index, recursively going down the tree
+fn calc_hash<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, proofs: &HashMap<(LogHeight,LogSize),String>, sizes: &[LogSize]) -> String{
     if index<sizes[level] {
         if let Some(h) = proofs.get(&(level,index)){
             return h.clone();
@@ -128,8 +182,8 @@ fn add_hash<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, pr
     if level>0{
         let two=LogSize::one().add(LogSize::one());
         let new_index=index * two;
-        let h1=add_hash(level-1,new_index,proofs,sizes);
-        let h2=add_hash(level-1,new_index+LogSize::one(),proofs,sizes);
+        let h1=calc_hash(level-1,new_index,proofs,sizes);
+        let h2=calc_hash(level-1,new_index+LogSize::one(),proofs,sizes);
         if h2.is_empty(){
             return h1;
         }
@@ -140,12 +194,16 @@ fn add_hash<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, pr
     String::new()
 }
 
+// An in-memory transparent log
 #[derive(Debug)]
 struct InMemoryLog<T> {
+    // Records are stored in a Vec
     data: Vec<T>,
+    // Hashes by level in the tree
     hashes: Vec<Vec<String>>,
 }
 
+// Default implementation for an empty in-memory log
 impl <T> Default for InMemoryLog<T>{
     fn default() -> Self {
         Self{data:Default::default(),hashes:Default::default()}
@@ -153,7 +211,7 @@ impl <T> Default for InMemoryLog<T>{
 }
 
 
-
+// Internal method
 impl <T> InMemoryLog<T> {
     fn push_hash(&mut self, level: LogHeight, hash: String){
         if self.hashes.len()<=level{
@@ -171,17 +229,16 @@ impl <T> InMemoryLog<T> {
 
 }
 
+// TransparentLog Trait implementation for in-memory log
 impl <T:Display> TransparentLog<T> for InMemoryLog<T> {
+    // Vec size
     type LogSize = usize;
 
-    fn append(&mut self, record: T) -> Self::LogSize{
-        
-        let mut hasher = Sha256::new();
-        hasher.input_str(&format!("{}",record));
-
+    fn append(&mut self, record: T, hash: String) -> Self::LogSize{
+     
         self.data.push(record);
 
-        self.push_hash(0, hasher.result_str());
+        self.push_hash(0, hash);
        
         self.data.len()
     }
@@ -218,7 +275,7 @@ impl <T:Display> TransparentLog<T> for InMemoryLog<T> {
 mod tests {
     use crypto::{sha2::Sha256, digest::Digest};
     
-    use crate::{InMemoryLog, TransparentLog, tree_sizes, proof_positions, verify, prefix_proof_positions, verify_tree};
+    use crate::{InMemoryLog, TransparentLog, tree_sizes, proof_positions, verify, prefix_proof_positions, verify_tree, LogClient, hash};
     use std::fmt::{Display,Formatter, Result};
 
     struct LogRecord {
@@ -230,12 +287,6 @@ mod tests {
             LogRecord{text:String::from(s)}
         }
 
-        pub fn calc_hash(&self) -> String {
-            let mut hasher = Sha256::new();
-            hasher.input_str(&format!("{}",self));
-            hasher.result_str()
-        }
-        
     }
 
     impl Display for LogRecord {
@@ -250,12 +301,14 @@ mod tests {
 
     fn append_multiple_offset<T: TransparentLog<LogRecord>>(log:&mut T, start:usize, nb:usize){
         for i in start..(start+nb) {
-            log.append(LogRecord{text:format!("rec{}",i)});
+            let lr=LogRecord{text:format!("rec{}",i)};
+            let h=hash(&lr);
+            log.append(lr,h);
         }
     }
 
     fn hash_two(start:usize) -> String{
-        hash_two_strings(&LogRecord{text:format!("rec{}",start)}.calc_hash(),&LogRecord{text:format!("rec{}",start+1)}.calc_hash())
+        hash_two_strings(&hash(&LogRecord{text:format!("rec{}",start)}),&hash(&LogRecord{text:format!("rec{}",start+1)}))
     }
 
     fn hash_two_strings(s1: &str, s2: &str) -> String{
@@ -276,10 +329,6 @@ mod tests {
         hasher.result_str()
     }
 
-    //fn get_proof<LogSize:Integer>(v: &[(LogHeight,LogSize,String)], h: LogHeight, i: LogSize) -> &str {
-    //    v.iter().find(|(r,ix,_)| *r==h && *ix==i).map(|t| &t.2).unwrap()
-    //}
-
     #[test]
     fn memory_empty() {
         let ml: InMemoryLog<LogRecord>=InMemoryLog::default();
@@ -292,14 +341,14 @@ mod tests {
     fn memory_add(){
         let mut ml: InMemoryLog<LogRecord>=InMemoryLog::default();
         let lr1=LogRecord::new("rec1");
-        let h1=lr1.calc_hash();
-        ml.append(lr1);           
+        let h1=hash(&lr1);
+        ml.append(lr1,h1.clone());           
         let (s,t) = ml.latest();
         assert_eq!(1,s);
         assert_eq!(h1,t);
         let lr2=LogRecord::new("rec2");
-        let h2=lr2.calc_hash();
-        ml.append(lr2);           
+        let h2=hash(&lr2);
+        ml.append(lr2,h2.clone());           
         let (s,t) = ml.latest();
         assert_eq!(2,s);
         let mut hasher = Sha256::new();
@@ -307,8 +356,8 @@ mod tests {
         assert_eq!(hasher.result_str(),t);
         let v=ml.proofs(proof_positions(1, 2).into_iter());
         assert_eq!(1,v.len());
-        assert_eq!(v.get(&(0,0)),Some(&LogRecord::new("rec1").calc_hash()));
-        assert!(verify(&(s,t),&(1,LogRecord::new("rec2").calc_hash()),&v));
+        assert_eq!(v.get(&(0,0)),Some(&hash(&LogRecord::new("rec1"))));
+        assert!(verify(&(s,t),&(1,hash(&LogRecord::new("rec2"))),&v));
     }
 
     #[test]
@@ -319,19 +368,28 @@ mod tests {
         assert_eq!(13,s);
         let v=ml.proofs(proof_positions(9, 13).into_iter());
         assert_eq!(4,v.len());
-        assert_eq!(v.get(&(0,8)),Some(&LogRecord::new("rec8").calc_hash()));
+        assert_eq!(v.get(&(0,8)),Some(&hash(&LogRecord::new("rec8"))));
         assert_eq!(v.get(&(1,5)),Some(&hash_two(10)));
         assert_eq!(v.get(&(3,0)),Some(&hash_eight(0)));
-        assert_eq!(v.get(&(0,12)),Some(&LogRecord::new("rec12").calc_hash()));
+        assert_eq!(v.get(&(0,12)),Some(&hash(&LogRecord::new("rec12"))));
 
-        let mut h=hash_two_strings(v.get(&(0,8)).unwrap(), &LogRecord::new("rec9").calc_hash());
+        let mut h=hash_two_strings(v.get(&(0,8)).unwrap(), &hash(&LogRecord::new("rec9")));
         h=hash_two_strings(&h,v.get(&(1,5)).unwrap());
         h=hash_two_strings(&h, v.get(&(0,12)).unwrap());
         h=hash_two_strings(v.get(&(3,0)).unwrap(), &h);
         assert_eq!(t,h);
 
-        assert!(verify(&(s,t),&(9,LogRecord::new("rec9").calc_hash()),&v));
+        assert!(verify(&(s,t),&(9,hash(&LogRecord::new("rec9"))),&v));
 
+    }
+
+    #[test]
+    fn client_memory_13(){
+        let mut ml: InMemoryLog<LogRecord>=InMemoryLog::default();
+        let mut client= LogClient::new(&ml);
+        append_multiple(&mut ml, 13);
+        let lr=ml.get(9).unwrap();
+        assert!(client.check_record(&ml,&(9,hash(&lr))));
     }
 
     #[test]
