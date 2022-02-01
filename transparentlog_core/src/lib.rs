@@ -27,42 +27,56 @@ pub trait TransparentLog<T> {
         where I: Iterator<Item=(LogHeight,Self::LogSize)>;
 }
 
-// Client to a TransparentLog, keeping track of the latest log verified
-pub struct LogClient<T,TL: TransparentLog<T>> {
-    pub latest: (TL::LogSize,String),
+pub trait LogClient<T,TL: TransparentLog<T>> {
+    fn latest(&self) -> &(TL::LogSize,String);
+
+    fn set_latest(&mut self, latest: (TL::LogSize,String));
+
+    fn cached(&self, position: &(LogHeight,TL::LogSize)) -> Option<String>;
+    
+    fn add_cached(&mut self, proofs: &HashMap<(LogHeight,TL::LogSize),String>);
 }
 
-impl <T,TL: TransparentLog<T>> LogClient<T,TL> {
-    // new instance connecting to a log for the first time
-    pub fn new(log: &TL) -> Self {
-        Self{latest:log.latest()}
-    }
 
-    // Open a new client with an existing latest verification
-    pub fn open(latest: (TL::LogSize,String)) -> Self {
-        Self{latest}
-    }
 
-    // Check a given index + hash is contained in the given log, using the stored latest verification if possible or updating the cache if needed
-    pub fn check_record(&mut self, log: &TL, record: &(TL::LogSize, String)) -> bool {
-        if record.0>=self.latest.0 {
-            let l2=log.latest();
-             
-            if self.latest.0>TL::LogSize::zero(){
-                let v=prefix_proof_positions(self.latest.0, l2.0);
-                let proofs=log.proofs(v.into_iter());
-                if !verify_tree(&self.latest,&proofs){
-                    return false;
-                }
-                if !verify_tree(&l2,&proofs){
-                    return false;
-                }
+// Check a given index + hash is contained in the given log, using the stored latest verification if possible or updating the cache if needed
+pub fn check_record<T,TL: TransparentLog<T>,LC: LogClient<T,TL>> (client: &mut LC, log: &TL, record: &(TL::LogSize, String)) -> bool {
+    if record.0>=client.latest().0 {
+        let l2=log.latest();
+         
+        if client.latest().0>TL::LogSize::zero(){
+            let v=prefix_proof_positions(client.latest().0, l2.0);
+            let proofs=get_proofs(client,log,v);
+            if !verify_tree(client.latest(),&proofs){
+                return false;
             }
-            self.latest= l2;
+            if !verify_tree(&l2,&proofs){
+                return false;
+            }
         }
-       let v= proof_positions(record.0,self.latest.0);
-       let proofs=log.proofs(v.into_iter());
-       verify(&self.latest,record,&proofs)
+        client.set_latest(l2);
+    }
+   let v= proof_positions(record.0,client.latest().0);
+   let proofs=get_proofs(client,log,v);
+   verify(&client.latest(),record,&proofs)
+}
+
+fn get_proofs<T,TL: TransparentLog<T>,LC: LogClient<T,TL>>(client: &mut LC, log: &TL,positions: HashSet<(LogHeight,TL::LogSize)>)
+    -> HashMap<(LogHeight,TL::LogSize),String> {
+    let mut cached:HashMap<(LogHeight,TL::LogSize),String>=HashMap::new();
+    let read = log.proofs(positions.into_iter().filter(|p| {
+        if let Some (h) = client.cached(p){
+            cached.insert(*p,h);
+            return false;
+        }
+        true
+    }));
+    client.add_cached(&read);
+    if cached.is_empty(){
+        return read;
+    } else {
+        cached.extend(read.into_iter());
+        cached
     }
 }
 
@@ -271,11 +285,76 @@ impl <T:Display> TransparentLog<T> for InMemoryLog<T> {
     } 
 }
 
+// In-memory client to a TransparentLog, keeping track of the latest log verified
+pub struct InMemoryLogClient<T,TL: TransparentLog<T>> {
+    latest: (TL::LogSize,String),
+
+    cache: Option<HashMap<(LogHeight,TL::LogSize),String>>,
+}
+
+// Build an in-memory client, from the current state of the log or a saved state
+pub struct InMemoryLogClientBuilder<T,TL: TransparentLog<T>>{
+    latest: (TL::LogSize,String),
+    cache: bool,
+}
+
+impl <T,TL: TransparentLog<T>> InMemoryLogClientBuilder<T,TL>{
+    pub fn new(log: &TL) -> Self {
+        Self {
+            latest: log.latest(),
+            cache: true,
+        }
+    }
+
+    pub fn open(latest: (TL::LogSize,String)) -> Self {
+        Self{latest,cache: true,}
+    }
+    
+    // Client caches positions by default, disable if needed
+    pub fn no_cache<'a>(&'a mut self) -> &'a mut Self {
+        self.cache=false;
+        self
+    }
+
+    pub fn build(&self) -> InMemoryLogClient<T,TL>{
+        InMemoryLogClient{latest:self.latest.clone(), 
+            cache:if self.cache{
+                Some(HashMap::new())
+            } else {
+                None
+            }}
+    }
+}
+
+
+impl <T,TL: TransparentLog<T>> LogClient<T,TL> for InMemoryLogClient<T,TL> {
+    fn latest(&self) -> &(TL::LogSize,String) {
+        &self.latest
+    }
+
+    fn set_latest(&mut self, latest: (TL::LogSize,String)) {
+        self.latest=latest
+    }
+
+    fn cached(&self, position: &(LogHeight,TL::LogSize)) -> Option<String> {
+        if let Some(m) = &self.cache {
+            return m.get(position).cloned()
+        }
+        None
+    }
+
+    fn add_cached(&mut self, proofs: &HashMap<(LogHeight,TL::LogSize),String>) {
+        if let Some(m) = self.cache.as_mut() {
+            m.extend(proofs.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crypto::{sha2::Sha256, digest::Digest};
     
-    use crate::{InMemoryLog, TransparentLog, tree_sizes, proof_positions, verify, prefix_proof_positions, verify_tree, LogClient, hash};
+    use crate::{InMemoryLog, TransparentLog, tree_sizes, proof_positions, verify, prefix_proof_positions, verify_tree, hash, check_record, LogClient, InMemoryLogClientBuilder};
     use std::fmt::{Display,Formatter, Result};
 
     struct LogRecord {
@@ -386,10 +465,29 @@ mod tests {
     #[test]
     fn client_memory_13(){
         let mut ml: InMemoryLog<LogRecord>=InMemoryLog::default();
-        let mut client= LogClient::new(&ml);
+        let mut client= InMemoryLogClientBuilder::new(&ml).build();
+        assert_eq!(0,client.latest().0);
+        assert_eq!(String::new(),client.latest().1);
+        assert!(client.cached(&(0,8)).is_none());
         append_multiple(&mut ml, 13);
         let lr=ml.get(9).unwrap();
-        assert!(client.check_record(&ml,&(9,hash(&lr))));
+        assert!(check_record(&mut client, &ml,&(9,hash(&lr))));
+        assert_eq!(13,client.latest().0);
+        assert!(client.cached(&(0,8)).is_some());
+    }
+
+    #[test]
+    fn client_memory_13_no_cache(){
+        let mut ml: InMemoryLog<LogRecord>=InMemoryLog::default();
+        let mut client= InMemoryLogClientBuilder::new(&ml).no_cache().build();
+        assert_eq!(0,client.latest().0);
+        assert_eq!(String::new(),client.latest().1);
+        assert!(client.cached(&(0,8)).is_none());
+        append_multiple(&mut ml, 13);
+        let lr=ml.get(9).unwrap();
+        assert!(check_record(&mut client, &ml,&(9,hash(&lr))));
+        assert_eq!(13,client.latest().0);
+        assert!(client.cached(&(0,8)).is_none());
     }
 
     #[test]
