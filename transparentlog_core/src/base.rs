@@ -1,23 +1,23 @@
 use std::collections::{HashMap,HashSet};
-use std::fmt::{Display};
-
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use maybe_owned::MaybeOwned;
 use num::{Integer,Zero};
 use std::hash::Hash;
 
+use serde::{Serialize,Deserialize};
+
 pub type LogHeight = usize;
 
 
 
 // Transparent log Trait
-pub trait TransparentLog<T> {
+pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
     // The type used to represent the log size
     type LogSize: Integer + Copy + Hash;
 
     // Append a new record to the log and return its index
-    fn append(&mut self, record: T, hash: String) -> anyhow::Result<Self::LogSize>;
+    fn append(&mut self, record: T) -> anyhow::Result<(Self::LogSize, String)>;
 
     // Get the latest log size and root hash
     fn latest(&self) -> anyhow::Result<(Self::LogSize,String)>;
@@ -30,7 +30,7 @@ pub trait TransparentLog<T> {
         where I: Iterator<Item=(LogHeight,Self::LogSize)>;
 }
 
-pub trait LogClient<T,TL: TransparentLog<T>> {
+pub trait LogClient<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a,T>> {
     fn latest(&self) -> &(TL::LogSize,String);
 
     fn set_latest(&mut self, latest: (TL::LogSize,String));
@@ -43,7 +43,7 @@ pub trait LogClient<T,TL: TransparentLog<T>> {
 
 
 // Check a given index + hash is contained in the given log, using the stored latest verification if possible or updating the cache if needed
-pub fn check_record<T,TL: TransparentLog<T>,LC: LogClient<T,TL>> (client: &mut LC, log: &TL, record: &(TL::LogSize, String)) -> anyhow::Result<bool> {
+pub fn check_record<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,LC: LogClient<'a, T,TL>> (client: &mut LC, log: &TL, record: &(TL::LogSize, String)) -> anyhow::Result<bool> {
     if record.0>=client.latest().0 {
         let l2=log.latest()?;
          
@@ -64,7 +64,7 @@ pub fn check_record<T,TL: TransparentLog<T>,LC: LogClient<T,TL>> (client: &mut L
    Ok(verify(&client.latest(),record,&proofs))
 }
 
-fn get_proofs<T,TL: TransparentLog<T>,LC: LogClient<T,TL>>(client: &mut LC, log: &TL,positions: HashSet<(LogHeight,TL::LogSize)>)
+fn get_proofs<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,LC: LogClient<'a, T,TL>>(client: &mut LC, log: &TL,positions: HashSet<(LogHeight,TL::LogSize)>)
     -> anyhow::Result<HashMap<(LogHeight,TL::LogSize),String>> {
     let mut cached:HashMap<(LogHeight,TL::LogSize),String>=HashMap::new();
     let read = log.proofs(positions.into_iter().filter(|p| {
@@ -84,10 +84,10 @@ fn get_proofs<T,TL: TransparentLog<T>,LC: LogClient<T,TL>>(client: &mut LC, log:
 }
 
 // Hash a given record via its Display instance
-pub fn hash<T: Display>(record: &T) -> String {
+pub fn hash<'a, T:Serialize>(record: &'a T) -> anyhow::Result<String> {
     let mut hasher = Sha256::new();
-    hasher.input_str(&format!("{}",record));
-    hasher.result_str()
+    hasher.input(&rmp_serde::to_vec(record)?);
+    Ok(hasher.result_str())
 }
 
 // Return the level sizes for each level of the tree
@@ -219,6 +219,8 @@ pub mod tests {
     use crypto::{sha2::Sha256, digest::Digest};
     use num::{Zero,One};
     use std::fmt::Debug;
+    use serde::{Serialize,Deserialize};
+    use core::ops::Deref;
 
     #[test]
     fn test_tree_sizes(){
@@ -292,7 +294,8 @@ pub mod tests {
 
     
  
-     pub struct LogRecord {
+     #[derive(Serialize,Deserialize,Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct LogRecord {
         pub text: String,
      }
  
@@ -309,33 +312,20 @@ pub mod tests {
          }
      }
 
-     impl AsRef<[u8]> for LogRecord{
-        fn as_ref(&self) -> &[u8] {
-            self.text.as_bytes()
-        }
-    }
- 
-    impl From<Vec<u8>> for LogRecord{
-        fn from(v: Vec<u8>) -> Self {
-            Self{text:String::from_utf8_lossy(&v).into_owned()}
-        }
-    }
-
-     pub fn append_multiple<T: TransparentLog<LogRecord>>(log:&mut T, nb:usize) -> anyhow::Result<()>{
+     pub fn append_multiple<'a, T: TransparentLog<'a, LogRecord>>(log:&mut T, nb:usize) -> anyhow::Result<()>{
          append_multiple_offset(log,0,nb)
      }
  
-     pub fn append_multiple_offset<T: TransparentLog<LogRecord>>(log:&mut T, start:usize, nb:usize) -> anyhow::Result<()>{
+     pub fn append_multiple_offset<'a, T: TransparentLog<'a, LogRecord>>(log:&mut T, start:usize, nb:usize) -> anyhow::Result<()>{
          for i in start..(start+nb) {
              let lr=LogRecord{text:format!("rec{}",i)};
-             let h=hash(&lr);
-             log.append(lr,h)?;
+             log.append(lr)?;
          }
          Ok(())
      }
  
-     pub fn hash_two(start:usize) -> String{
-         hash_two_strings(&hash(&LogRecord{text:format!("rec{}",start)}),&hash(&LogRecord{text:format!("rec{}",start+1)}))
+     pub fn hash_two(start:usize) -> anyhow::Result<String>{
+         Ok(hash_two_strings(&hash(&LogRecord{text:format!("rec{}",start)})?,&hash(&LogRecord{text:format!("rec{}",start+1)})?))
      }
  
      pub fn hash_two_strings(s1: &str, s2: &str) -> String{
@@ -344,37 +334,45 @@ pub mod tests {
          hasher.result_str()
      }
  
-     pub fn hash_four(start:usize) -> String{
+     pub fn hash_four(start:usize) -> anyhow::Result<String>{
          let mut hasher = Sha256::new();
-         hasher.input_str(&format!("{}{}",hash_two(start),hash_two(start+2)));
-         hasher.result_str()
+         hasher.input_str(&format!("{}{}",hash_two(start)?,hash_two(start+2)?));
+         Ok(hasher.result_str())
      }
  
-     pub fn hash_eight(start:usize) -> String{
+     pub fn hash_eight(start:usize) -> anyhow::Result<String>{
          let mut hasher = Sha256::new();
-         hasher.input_str(&format!("{}{}",hash_four(start),hash_four(start+4)));
-         hasher.result_str()
+         hasher.input_str(&format!("{}{}",hash_four(start)?,hash_four(start+4)?));
+         Ok(hasher.result_str())
      }
  
-    pub fn empty<T>(ml: &mut T) -> anyhow::Result<()>
-        where T:TransparentLog<LogRecord>, T::LogSize:Debug{
+    pub fn empty<'a, T>(ml: &mut T) -> anyhow::Result<()>
+        where T:TransparentLog<'a, LogRecord>, T::LogSize:Debug{
          let (s,t) = ml.latest()?;
          assert_eq!(T::LogSize::zero(),s);
          assert_eq!("",&t);
          Ok(())
      }
 
-     pub fn add<T>(ml: &mut T)-> anyhow::Result<()>
-     where T:TransparentLog<LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>{
+     pub fn add<'a, T>(ml: &mut T)-> anyhow::Result<()>
+     where T:TransparentLog<'a, LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>{
          let lr1=LogRecord::new("rec1");
-         let h1=hash(&lr1);
-         ml.append(lr1,h1.clone())?;           
+         let h1=hash(&lr1)?;
+         let (ix,h1s) = ml.append(lr1)?;      
+         assert_eq!(T::LogSize::zero(),ix);     
+         assert_eq!(h1,h1s);
+         let og=ml.get(ix)?;
+         assert_eq!("rec1",og.unwrap().text);
          let (s,t) = ml.latest()?;
          assert_eq!(T::LogSize::one(),s);
          assert_eq!(h1,t);
          let lr2=LogRecord::new("rec2");
-         let h2=hash(&lr2);
-         ml.append(lr2,h2.clone())?;           
+         let h2=hash(&lr2)?;
+         let (ix,h2s)=ml.append(lr2)?;           
+         assert_eq!(Into::<T::LogSize>::into(1),ix);     
+         assert_eq!(h2,h2s);
+         let og=ml.get(ix)?;
+         assert_eq!("rec2",og.unwrap().text);
          let (s,t) = ml.latest()?;
          assert_eq!(Into::<T::LogSize>::into(2),s);
          let mut hasher = Sha256::new();
@@ -382,69 +380,69 @@ pub mod tests {
          assert_eq!(hasher.result_str(),t);
          let v=ml.proofs(proof_positions::<T::LogSize>(1.into(), 2.into()).into_iter())?;
          assert_eq!(1,v.len());
-         assert_eq!(v.get(&(0,0.into())),Some(&hash(&LogRecord::new("rec1"))));
-         assert!(verify(&(s,t),&(1.into(),hash(&LogRecord::new("rec2"))),&v));
+         assert_eq!(v.get(&(0,0.into())),Some(&hash(&LogRecord::new("rec1"))?));
+         assert!(verify(&(s,t),&(1.into(),hash(&LogRecord::new("rec2"))?),&v));
          Ok(())
      }
  
     
-     pub fn test_13<T>(ml: &mut T)-> anyhow::Result<()>
-     where T:TransparentLog<LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>{
+     pub fn test_13<'a, T>(ml: &mut T)-> anyhow::Result<()>
+     where T:TransparentLog<'a, LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>{
          append_multiple(ml, 13)?;
          check_13(ml)
  
      }
  
-     pub fn check_13<T>(ml: & T)-> anyhow::Result<()>
-     where T:TransparentLog<LogRecord>, T::LogSize:Debug, T::LogSize:From<u8> {
+     pub fn check_13<'a, T>(ml: & T)-> anyhow::Result<()>
+     where T:TransparentLog<'a, LogRecord>, T::LogSize:Debug, T::LogSize:From<u8> {
         let (s,t) = ml.latest()?;
         assert_eq!(Into::<T::LogSize>::into(13),s);
         let v=ml.proofs(proof_positions::<T::LogSize>(9.into(), 13.into()).into_iter())?;
         assert_eq!(4,v.len());
-        assert_eq!(v.get(&(0,8.into())),Some(&hash(&LogRecord::new("rec8"))));
-        assert_eq!(v.get(&(1,5.into())),Some(&hash_two(10)));
-        assert_eq!(v.get(&(3,0.into())),Some(&hash_eight(0)));
-        assert_eq!(v.get(&(0,12.into())),Some(&hash(&LogRecord::new("rec12"))));
+        assert_eq!(v.get(&(0,8.into())),Some(&hash(&LogRecord::new("rec8"))?));
+        assert_eq!(v.get(&(1,5.into())),Some(&hash_two(10)?));
+        assert_eq!(v.get(&(3,0.into())),Some(&hash_eight(0)?));
+        assert_eq!(v.get(&(0,12.into())),Some(&hash(&LogRecord::new("rec12"))?));
 
-        let mut h=hash_two_strings(v.get(&(0,8.into())).unwrap(), &hash(&LogRecord::new("rec9")));
+        let mut h=hash_two_strings(v.get(&(0,8.into())).unwrap(), &hash(&LogRecord::new("rec9"))?);
         h=hash_two_strings(&h,v.get(&(1,5.into())).unwrap());
         h=hash_two_strings(&h, v.get(&(0,12.into())).unwrap());
         h=hash_two_strings(v.get(&(3,0.into())).unwrap(), &h);
         assert_eq!(t,h);
 
-        assert!(verify(&(s,t),&(9.into(),hash(&LogRecord::new("rec9"))),&v));
+        assert!(verify(&(s,t),&(9.into(),hash(&LogRecord::new("rec9"))?),&v));
         Ok(())
      }
 
-    pub fn client_13<T, LC>(ml: &mut T, client: &mut LC)-> anyhow::Result<()>
-    where T:TransparentLog<LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>, LC:LogClient<LogRecord,T>{
+    pub fn client_13<'a, T, LC>(ml: &mut T, client: &mut LC)-> anyhow::Result<()>
+    where T:TransparentLog<'a, LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>, LC:LogClient<'a, LogRecord,T>{
          assert_eq!(T::LogSize::zero(),client.latest().0);
          assert_eq!(String::new(),client.latest().1);
          assert!(client.cached(&(0,8.into())).is_none());
          append_multiple(ml, 13)?;
          let lr=ml.get(9.into())?.unwrap();
-         assert!(check_record(client, ml,&(9.into(),hash(&lr)))?);
+         assert!(check_record(client, ml,&(9.into(),hash(lr.deref())?))?);
          assert_eq!(Into::<T::LogSize>::into(13),client.latest().0);
          assert!(client.cached(&(0,8.into())).is_some());
          Ok(())
      }
  
-     pub fn client_13_nocache<T, LC>(ml: &mut T, client: &mut LC)-> anyhow::Result<()>
-     where T:TransparentLog<LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>, LC:LogClient<LogRecord,T>{
+     pub fn client_13_nocache<'a, T, LC>(ml: &mut T, client: &mut LC)-> anyhow::Result<()>
+     where T:TransparentLog<'a, LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>, LC:LogClient<'a, LogRecord,T>{
           assert_eq!(T::LogSize::zero(),client.latest().0);
           assert_eq!(String::new(),client.latest().1);
           assert!(client.cached(&(0,8.into())).is_none());
           append_multiple(ml, 13)?;
           let lr=ml.get(9.into())?.unwrap();
-          assert!(check_record(client, ml,&(9.into(),hash(&lr)))?);
+          assert!(check_record(client, ml,&(9.into(),hash(lr.deref())?))?);
           assert_eq!(Into::<T::LogSize>::into(13),client.latest().0);
           assert!(client.cached(&(0,8.into())).is_none());
           Ok(())
       }
   
 
-     pub fn test_verify_tree_prefix<T>(ml: &mut T)-> anyhow::Result<()>
-      where T:TransparentLog<LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>{
+     pub fn test_verify_tree_prefix<'a, T>(ml: &mut T)-> anyhow::Result<()>
+      where T:TransparentLog<'a, LogRecord>, T::LogSize:Debug, T::LogSize:From<u8>{
          append_multiple(ml, 7)?;
          let (s0,t0) = ml.latest()?;
          append_multiple_offset(ml, 8,6)?;

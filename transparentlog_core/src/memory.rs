@@ -4,6 +4,7 @@ use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use maybe_owned::MaybeOwned;
 use std::fmt::Debug;
+use serde::{Serialize,Deserialize};
 
 pub use crate::base::*;
 
@@ -45,17 +46,17 @@ impl <T> InMemoryLog<T> {
 }
 
 // TransparentLog Trait implementation for in-memory log
-impl <T> TransparentLog<T> for InMemoryLog<T> {
+impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T> {
     // Vec size
     type LogSize = usize;
 
-    fn append(&mut self, record: T, hash: String) -> anyhow::Result<Self::LogSize>{
-     
+    fn append(&mut self, record: T) -> anyhow::Result<(Self::LogSize,String)>{
+        let hash= hash(&record)?;
         self.data.push(record);
-
-        self.push_hash(0, hash);
+        
+        self.push_hash(0, hash.clone());
        
-        Ok(self.data.len())
+        Ok((self.data.len()-1,hash))
     }
 
     fn latest(&self) -> anyhow::Result<(Self::LogSize,String)> {
@@ -87,19 +88,19 @@ impl <T> TransparentLog<T> for InMemoryLog<T> {
 }
 
 // In-memory client to a TransparentLog, keeping track of the latest log verified
-pub struct InMemoryLogClient<T,TL: TransparentLog<T>> {
+pub struct InMemoryLogClient<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> {
     latest: (TL::LogSize,String),
 
     cache: Option<HashMap<(LogHeight,TL::LogSize),String>>,
 }
 
 // Build an in-memory client, from the current state of the log or a saved state
-pub struct InMemoryLogClientBuilder<T,TL: TransparentLog<T>>{
+pub struct InMemoryLogClientBuilder<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>>{
     latest: (TL::LogSize,String),
     cache: bool,
 }
 
-impl <T,TL: TransparentLog<T>> InMemoryLogClientBuilder<T,TL>{
+impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> InMemoryLogClientBuilder<'a, T,TL>{
     pub fn new(log: &TL) -> anyhow::Result<Self> {
         let latest=log.latest()?;
         Ok(Self {
@@ -113,12 +114,12 @@ impl <T,TL: TransparentLog<T>> InMemoryLogClientBuilder<T,TL>{
     }
     
     // Client caches positions by default, disable if needed
-    pub fn no_cache<'a>(&'a mut self) -> &'a mut Self {
+    pub fn no_cache<'b>(&'b mut self) -> &'b mut Self {
         self.cache=false;
         self
     }
 
-    pub fn build(&self) -> InMemoryLogClient<T,TL>{
+    pub fn build(&self) -> InMemoryLogClient<'a, T,TL>{
         InMemoryLogClient{latest:self.latest.clone(), 
             cache:if self.cache{
                 Some(HashMap::new())
@@ -129,7 +130,7 @@ impl <T,TL: TransparentLog<T>> InMemoryLogClientBuilder<T,TL>{
 }
 
 
-impl <T,TL: TransparentLog<T>> LogClient<T,TL> for InMemoryLogClient<T,TL> {
+impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> LogClient<'a, T,TL> for InMemoryLogClient<'a, T,TL> {
     fn latest(&self) -> &(TL::LogSize,String) {
         &self.latest
     }

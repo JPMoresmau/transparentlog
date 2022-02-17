@@ -11,12 +11,14 @@ use std::io::{Result, SeekFrom};
 use std::io::prelude::*;
 use std::cell::RefCell;
 pub use crate::base::*;
+use serde::{Serialize,Deserialize};
+use serde::de::DeserializeOwned;
 
 const HASH_SIZE_IN_BYTES:usize=64;
 
 // An in-memory transparent log
 #[derive(Debug)]
-pub struct FileLog<'a, T:AsRef<[u8]>> {
+pub struct FileLog<'a, T:Serialize+Deserialize<'a>> {
     dir: &'a Path,
     data: RefCell<File>,
     index: RefCell<File>,
@@ -24,7 +26,7 @@ pub struct FileLog<'a, T:AsRef<[u8]>> {
     _marker: PhantomData<T>
 }
 
-impl <'a, T:AsRef<[u8]>> FileLog<'a, T> {
+impl <'a, T:Serialize+Deserialize<'a>> FileLog<'a, T> {
     pub fn open<P: AsRef<Path>>(dir: &'a P) -> Result<Self> {
         let dir=dir.as_ref();
         let data=OpenOptions::new().read(true).append(true).create(true).open(dir.join("data.bin"))?;
@@ -50,7 +52,7 @@ impl <'a, T:AsRef<[u8]>> FileLog<'a, T> {
 
 }
 
-fn push_hash(dir: &Path, hs: &mut Vec<File>, level: LogHeight, hash: String) ->anyhow::Result<()>{
+fn push_hash(dir: &Path, hs: &mut Vec<File>, level: LogHeight, hash: &str) ->anyhow::Result<()>{
 
     if hs.len()<=level{
         let p = dir.join(format!("hash{}.bin",level));
@@ -59,7 +61,7 @@ fn push_hash(dir: &Path, hs: &mut Vec<File>, level: LogHeight, hash: String) ->a
     let v=  hs.get_mut(level).unwrap();
     
     let b=hash.as_bytes();
-    println!("Size of array: {}",b.len());
+    //println!("Size of array: {}",b.len());
     v.write_all(b)?;
     let l = v.metadata()?.len()/b.len() as u64;
     if l % 2 ==0 {
@@ -68,24 +70,26 @@ fn push_hash(dir: &Path, hs: &mut Vec<File>, level: LogHeight, hash: String) ->a
         v.read_exact(&mut b2)?;
         let mut hasher = Sha256::new();
         hasher.input_str(&format!("{}{}",String::from_utf8_lossy(&b2),hash));
-        push_hash(dir, hs, level+1, hasher.result_str())?;
+        push_hash(dir, hs, level+1, &hasher.result_str())?;
     }
     Ok(())
 }
 
 const SZ:u64=std::mem::size_of::<usize>() as u64 + std::mem::size_of::<u64>() as u64;
 
-impl <'a, T:AsRef<[u8]> + From<Vec<u8>>> TransparentLog<T> for FileLog<'a,T> {
+impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T> {
     // Vec size
     type LogSize = u64;
 
-    fn append(&mut self, record: T, hash: String) -> anyhow::Result<Self::LogSize>{ 
+    fn append(&mut self, record: T) -> anyhow::Result<(Self::LogSize,String)>{ 
+        let hash= hash(&record)?;
+       
         let mut data_file=self.data.borrow_mut();
         let offset=data_file.metadata()?.len();
-        let data=record.as_ref();
+        let data=rmp_serde::to_vec(&record)?;
         let length=data.len();
         data_file.seek(SeekFrom::End(0))?;
-        data_file.write_all(data)?;
+        data_file.write_all(&data)?;
         let mut index_file=self.index.borrow_mut();
         let id=index_file.metadata()?.len()/SZ;
         index_file.seek(SeekFrom::End(0))?;
@@ -94,9 +98,9 @@ impl <'a, T:AsRef<[u8]> + From<Vec<u8>>> TransparentLog<T> for FileLog<'a,T> {
 
                 
         let mut hs=self.hashes.borrow_mut();
-        push_hash(self.dir, &mut hs, 0, hash)?;
+        push_hash(self.dir, &mut hs, 0, &hash)?;
 
-        Ok(id)
+        Ok((id,hash))
     }
 
     fn latest(&self) -> anyhow::Result<(Self::LogSize,String)> {
@@ -138,7 +142,8 @@ impl <'a, T:AsRef<[u8]> + From<Vec<u8>>> TransparentLog<T> for FileLog<'a,T> {
         let mut data_file=self.data.borrow_mut();
         data_file.seek(SeekFrom::Start(offset))?;
         data_file.read_exact(&mut b3)?;
-        Ok(Some(MaybeOwned::Owned(T::from(b3))))
+        let r=rmp_serde::from_read_ref(&b3)?;
+        Ok(Some(MaybeOwned::Owned(r)))
     }
 
     fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<(LogHeight,Self::LogSize),String>>
