@@ -81,7 +81,7 @@ impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T>
     // Vec size
     type LogSize = u64;
 
-    fn append(&mut self, record: T) -> anyhow::Result<(Self::LogSize,String)>{ 
+    fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>{ 
         let hash= hash(&record)?;
        
         let mut data_file=self.data.borrow_mut();
@@ -100,10 +100,10 @@ impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T>
         let mut hs=self.hashes.borrow_mut();
         push_hash(self.dir, &mut hs, 0, &hash)?;
 
-        Ok((id,hash))
+        Ok(Record{id,hash})
     }
 
-    fn latest(&self) -> anyhow::Result<(Self::LogSize,String)> {
+    fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>> {
         let sz=self.index.borrow().metadata()?.len()/SZ;
         let mut r=vec![];
         for v in self.hashes.borrow_mut().iter_mut().rev(){
@@ -124,7 +124,7 @@ impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T>
             r.push(hasher.result_str());
         }
 
-        Ok((sz,r.pop().unwrap_or_default()))
+        Ok(LogTree{size:sz,hash:r.pop().unwrap_or_default()})
     }
 
     fn get(&self, index: Self::LogSize) -> anyhow::Result<Option<MaybeOwned<T>>> {
@@ -146,16 +146,16 @@ impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T>
         Ok(Some(MaybeOwned::Owned(r)))
     }
 
-    fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<(LogHeight,Self::LogSize),String>>
-    where I: Iterator<Item=(LogHeight,Self::LogSize)> {
+    fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<LogTreePosition<Self::LogSize>,String>>
+    where I: Iterator<Item=LogTreePosition<Self::LogSize>> {
         let mut m=HashMap::new();
         let mut hashes=self.hashes.borrow_mut();
-        for (r,i) in positions {
-            if let Some(f)=hashes.get_mut(r){
-                f.seek(SeekFrom::Start(i*HASH_SIZE_IN_BYTES as u64))?;
+        for pos in positions {
+            if let Some(f)=hashes.get_mut(pos.level){
+                f.seek(SeekFrom::Start(pos.index*HASH_SIZE_IN_BYTES as u64))?;
                 let mut b=vec![0_u8;HASH_SIZE_IN_BYTES];
                 f.read_exact(&mut b)?;
-                m.insert((r,i),String::from_utf8_lossy(&b).into_owned());
+                m.insert(pos,String::from_utf8_lossy(&b).into_owned());
             }
         }
      

@@ -50,16 +50,16 @@ impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T>
     // Vec size
     type LogSize = usize;
 
-    fn append(&mut self, record: T) -> anyhow::Result<(Self::LogSize,String)>{
+    fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>{
         let hash= hash(&record)?;
         self.data.push(record);
         
         self.push_hash(0, hash.clone());
        
-        Ok((self.data.len()-1,hash))
+        Ok(Record{id:self.data.len()-1,hash})
     }
 
-    fn latest(&self) -> anyhow::Result<(Self::LogSize,String)> {
+    fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>> {
         let mut r=vec![];
         for v in self.hashes.iter().rev(){
             if v.len() % 2 == 1 {
@@ -74,29 +74,32 @@ impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T>
             r.push(hasher.result_str());
         }
         
-        Ok((self.data.len(), r.pop().unwrap_or_default()))
+        Ok(LogTree{size:self.data.len(), hash:r.pop().unwrap_or_default()})
     }
 
     fn get(&self, index: Self::LogSize) ->anyhow::Result<Option<MaybeOwned<T>>> {
         Ok(self.data.get(index).map(|t| t.into()))
     }
 
-    fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<(LogHeight,Self::LogSize),String>>
-    where I: Iterator<Item=(LogHeight,Self::LogSize)> {
-        Ok(positions.map(|(r,i)| ((r,i),self.hashes[r][i].clone())).collect())
+    fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<LogTreePosition<Self::LogSize>,String>>
+    where I: Iterator<Item=LogTreePosition<Self::LogSize>> {
+        Ok(positions.map(|p| {
+            let hash=self.hashes[p.level][p.index].clone();
+            (p,hash)}
+    ).collect())
     } 
 }
 
 // In-memory client to a TransparentLog, keeping track of the latest log verified
 pub struct InMemoryLogClient<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> {
-    latest: (TL::LogSize,String),
+    latest: LogTree<TL::LogSize>,
 
-    cache: Option<HashMap<(LogHeight,TL::LogSize),String>>,
+    cache: Option<HashMap<LogTreePosition<TL::LogSize>,String>>,
 }
 
 // Build an in-memory client, from the current state of the log or a saved state
 pub struct InMemoryLogClientBuilder<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>>{
-    latest: (TL::LogSize,String),
+    latest: LogTree<TL::LogSize>,
     cache: bool,
 }
 
@@ -109,7 +112,7 @@ impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> InMemoryLogCli
         })
     }
 
-    pub fn open(latest: (TL::LogSize,String)) -> Self {
+    pub fn open(latest: LogTree<TL::LogSize>) -> Self {
         Self{latest,cache: true,}
     }
     
@@ -120,7 +123,7 @@ impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> InMemoryLogCli
     }
 
     pub fn build(&self) -> InMemoryLogClient<'a, T,TL>{
-        InMemoryLogClient{latest:self.latest.clone(), 
+        InMemoryLogClient{latest:LogTree{size:self.latest.size,hash:self.latest.hash.clone()}, 
             cache:if self.cache{
                 Some(HashMap::new())
             } else {
@@ -131,22 +134,22 @@ impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> InMemoryLogCli
 
 
 impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> LogClient<'a, T,TL> for InMemoryLogClient<'a, T,TL> {
-    fn latest(&self) -> &(TL::LogSize,String) {
+    fn latest(&self) -> &LogTree<TL::LogSize> {
         &self.latest
     }
 
-    fn set_latest(&mut self, latest: (TL::LogSize,String)) {
+    fn set_latest(&mut self, latest: LogTree<TL::LogSize>) {
         self.latest=latest
     }
 
-    fn cached(&self, position: &(LogHeight,TL::LogSize)) -> Option<String> {
+    fn cached(&self, position: &LogTreePosition<TL::LogSize>) -> Option<String> {
         if let Some(m) = &self.cache {
             return m.get(position).cloned()
         }
         None
     }
 
-    fn add_cached(&mut self, proofs: &HashMap<(LogHeight,TL::LogSize),String>) {
+    fn add_cached(&mut self, proofs: &HashMap<LogTreePosition<TL::LogSize>,String>) {
         if let Some(m) = self.cache.as_mut() {
             m.extend(proofs.clone());
         }
