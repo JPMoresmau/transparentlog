@@ -88,7 +88,7 @@ pub fn check_record<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,L
     }
    let v= proof_positions(record.id,client.latest().size);
    let proofs=get_proofs(client,log,v)?;
-   Ok(verify(&client.latest(),record,&proofs))
+   Ok(verify(client.latest(),record,&proofs))
 }
 
 fn get_proofs<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,LC: LogClient<'a, T,TL>>(client: &mut LC, log: &TL,positions: HashSet<LogTreePosition<TL::LogSize>>)
@@ -111,7 +111,7 @@ fn get_proofs<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,LC: Log
 }
 
 // Hash a given record via its Display instance
-pub fn hash<'a, T:Serialize>(record: &'a T) -> anyhow::Result<String> {
+pub fn hash<T:Serialize>(record: &T) -> anyhow::Result<String> {
     let mut hasher = Sha256::new();
     hasher.input(&rmp_serde::to_vec(record)?);
     Ok(hasher.result_str())
@@ -170,7 +170,7 @@ fn proof_step<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, 
             }
         }
     } else {
-        proof.insert(LogTreePosition{level:level,index:index - LogSize::one()});
+        proof.insert(LogTreePosition{level,index:index - LogSize::one()});
     }
     if level<sizes.len()-1{
         proof_step(level+1, index/two, size/two, sizes, proof);

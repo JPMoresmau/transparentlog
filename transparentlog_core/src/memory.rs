@@ -117,7 +117,7 @@ impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> InMemoryLogCli
     }
     
     // Client caches positions by default, disable if needed
-    pub fn no_cache<'b>(&'b mut self) -> &'b mut Self {
+    pub fn no_cache<>(&mut self) -> &mut Self {
         self.cache=false;
         self
     }

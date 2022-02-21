@@ -42,7 +42,7 @@ impl <'a, T:Serialize+Deserialize<'a>> FileLog<'a, T> {
         }
 
         Ok(Self {
-            dir: dir.clone(),
+            dir,
             data:RefCell::new(data), index:RefCell::new(index), hashes:RefCell::new(hashes),
             _marker: PhantomData
         })
