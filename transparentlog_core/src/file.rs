@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 
 const HASH_SIZE_IN_BYTES:usize=64;
 
-// An in-memory transparent log
+/// A file based transparent log
 #[derive(Debug)]
 pub struct FileLog<'a, T:Serialize+Deserialize<'a>> {
     dir: &'a Path,
@@ -24,6 +24,7 @@ pub struct FileLog<'a, T:Serialize+Deserialize<'a>> {
 }
 
 impl <'a, T:Serialize+Deserialize<'a>> FileLog<'a, T> {
+    /// Open a new or existing log from the given directory
     pub fn open<P: AsRef<Path>>(dir: &'a P) -> anyhow::Result<Self> {
         let dir=dir.as_ref();
         let data=OpenOptions::new().read(true).append(true).create(true).open(dir.join("data.bin"))?;
@@ -49,6 +50,7 @@ impl <'a, T:Serialize+Deserialize<'a>> FileLog<'a, T> {
 
 }
 
+/// The size of an index record: the offset in the file and the record length
 const SZ:u64=std::mem::size_of::<usize>() as u64 + std::mem::size_of::<u64>() as u64;
 
 impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T> {

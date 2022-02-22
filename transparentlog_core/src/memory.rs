@@ -8,7 +8,7 @@ pub use crate::base::*;
 
 
 
-// An in-memory transparent log
+/// An in-memory transparent log
 #[derive(Debug)]
 pub struct InMemoryLog<T> {
     // Records are stored in a Vec
@@ -17,7 +17,7 @@ pub struct InMemoryLog<T> {
     hashes: Vec<Vec<String>>,
 }
 
-// Default implementation for an empty in-memory log
+/// Default implementation for an empty in-memory log
 impl <T> Default for InMemoryLog<T>{
     fn default() -> Self {
         Self{data:Default::default(),hashes:Default::default()}
@@ -25,9 +25,9 @@ impl <T> Default for InMemoryLog<T>{
 }
 
 
-// TransparentLog Trait implementation for in-memory log
+/// TransparentLog Trait implementation for in-memory log
 impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T> {
-    // Vec size
+    /// Vec size
     type LogSize = usize;
 
     fn size(&self) -> anyhow::Result<Self::LogSize> {
@@ -59,20 +59,21 @@ impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T>
     } 
 }
 
-// In-memory client to a TransparentLog, keeping track of the latest log verified
+/// In-memory client to a TransparentLog, keeping track of the latest log verified
 pub struct InMemoryLogClient<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> {
     latest: LogTree<TL::LogSize>,
 
     cache: Option<HashMap<LogTreePosition<TL::LogSize>,String>>,
 }
 
-// Build an in-memory client, from the current state of the log or a saved state
+/// Build an in-memory client, from the current state of the log or a saved state
 pub struct InMemoryLogClientBuilder<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>>{
     latest: LogTree<TL::LogSize>,
     cache: bool,
 }
 
 impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> InMemoryLogClientBuilder<'a, T,TL>{
+    /// Create a new client on an existing log
     pub fn new(log: &TL) -> anyhow::Result<Self> {
         let latest=log.latest()?;
         Ok(Self {
@@ -81,16 +82,18 @@ impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> InMemoryLogCli
         })
     }
 
+    /// Create a new client from a tree record
     pub fn open(latest: LogTree<TL::LogSize>) -> Self {
         Self{latest,cache: true,}
     }
     
-    // Client caches positions by default, disable if needed
+    /// Client caches positions by default, disable if needed
     pub fn no_cache<>(&mut self) -> &mut Self {
         self.cache=false;
         self
     }
 
+    /// Build a new client
     pub fn build(&self) -> InMemoryLogClient<'a, T,TL>{
         InMemoryLogClient{latest:LogTree{size:self.latest.size,hash:self.latest.hash.clone()}, 
             cache:if self.cache{

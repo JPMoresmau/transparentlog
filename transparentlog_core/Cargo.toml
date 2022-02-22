@@ -1,7 +1,13 @@
 [package]
 name = "transparentlog_core"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.58.1"
+description = "Core API for Transparent Log, with in-memory and file implementations"
+repository = "https://github.com/JPMoresmau/transparentlog"
+categories = ["data-structures","cryptography::cryptocurrencies"]
+keywords = ["distributed","log","merkle"]
 
 [dependencies]
 rust-crypto = "0.2.36"

@@ -7,16 +7,17 @@ use std::hash::Hash;
 
 use serde::{Serialize,Deserialize};
 
+/// The height of the tree
 pub type LogHeight = usize;
 
-// Reference to a Record, with its ID and its hash
+/// Reference to a Record, with its ID and its hash
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub struct Record<LogSize> {
     pub id: LogSize,
     pub hash: String,
 }
 
-// Position in the tree
+/// Position in the tree
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub struct LogTreePosition<LogSize> {
     pub level: LogHeight,
@@ -30,7 +31,7 @@ impl <LogSize> From<(LogHeight,LogSize)> for LogTreePosition<LogSize> {
 }
 
 
-// Reference to a full log: its size and root hash
+/// Reference to a full log: its size and root hash
 pub struct LogTree<LogSize>{
     pub size: LogSize,
     pub hash: String,
@@ -38,22 +39,21 @@ pub struct LogTree<LogSize>{
 
 
 
-// Transparent log Trait
+/// Transparent log Trait
 pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
-    // The type used to represent the log size
+    /// The type used to represent the log size
     type LogSize: Integer + Copy + Hash;
 
-    // Add a record, return the record ID
+    /// Add a record, return the record ID
     fn add(&mut self, record: T) -> anyhow::Result<Self::LogSize>;
 
-    // Add a hash and index, returns the index of the added hash
+    /// Add a hash and index, returns the index of the added hash
     fn add_hash(&mut self,level: LogHeight, hash: String) -> anyhow::Result<Self::LogSize>;
 
-    // Get a hash at the given level and index
+    /// Get a hash at the given level and index
     fn get_hash(&self, level: LogHeight, index: Self::LogSize) -> anyhow::Result<MaybeOwned<String>>;
 
-    // Append a new record to the log and return its index
-    //fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>;
+    /// Append a new record to the log and return its index
     fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>{
         let hash= hash(&record)?;
         let id=self.add(record)?;
@@ -61,7 +61,7 @@ pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
         Ok(Record{id,hash})
     }
 
-    // Recursively push a hash to the tree at given level
+    /// Recursively push a hash to the tree at given level
     fn push_hash(&mut self, level: LogHeight, hash: String)-> anyhow::Result<Self::LogSize>{
         let hid=self.add_hash(level,hash.clone())?;
         let two=Self::LogSize::one().add(Self::LogSize::one());
@@ -74,9 +74,10 @@ pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
         Ok(hid)
     }
 
+    /// Get the log size
     fn size(&self) -> anyhow::Result<Self::LogSize>;
 
-    // Get the latest log size and root hash
+    /// Get the latest log size and root hash
     fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>>{
         let sz= self.size()?;
         let two=Self::LogSize::one().add(Self::LogSize::one());
@@ -99,10 +100,10 @@ pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
         Ok(LogTree{size:sz, hash:r.pop().unwrap_or_default().into_owned()})
     }
 
-    // Retrieve a log entry by its index
+    /// Retrieve a log entry by its index
     fn get(&self, index: Self::LogSize) -> anyhow::Result<Option<MaybeOwned<T>>>;
 
-    // Return the requested proofs from the log
+    /// Return the requested proofs from the log
     fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<LogTreePosition<Self::LogSize>,String>>
         where I: Iterator<Item=LogTreePosition<Self::LogSize>> {
         positions.map(|p| {
@@ -113,23 +114,24 @@ pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
 }
 
 
-
-
-
-
+/// A simple log client, optionally keeping a cache of tree entries
 pub trait LogClient<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a,T>> {
+    /// Get the latest tree information stored
     fn latest(&self) -> &LogTree<TL::LogSize>;
 
+    /// Set the latest tree information
     fn set_latest(&mut self, latest: LogTree<TL::LogSize>);
 
+    /// Get a cached position if known
     fn cached(&self, position: &LogTreePosition<TL::LogSize>) -> Option<String>;
     
+    /// Cache all positions in the HashMap
     fn add_cached(&mut self, proofs: &HashMap<LogTreePosition<TL::LogSize>,String>);
 }
 
 
 
-// Check a given index + hash is contained in the given log, using the stored latest verification if possible or updating the cache if needed
+/// Check a given index + hash is contained in the given log, using the stored latest verification if possible or updating the cache if needed
 pub fn check_record<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,LC: LogClient<'a, T,TL>> (client: &mut LC, log: &TL, record: &Record<TL::LogSize>) -> anyhow::Result<bool> {
     if record.id>=client.latest().size {
         let l2=log.latest()?;
@@ -151,6 +153,7 @@ pub fn check_record<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,L
    Ok(verify(client.latest(),record,&proofs))
 }
 
+/// Get all the proofs from a given log to a given client, for all the positions
 fn get_proofs<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,LC: LogClient<'a, T,TL>>(client: &mut LC, log: &TL,positions: HashSet<LogTreePosition<TL::LogSize>>)
     -> anyhow::Result<HashMap<LogTreePosition<TL::LogSize>,String>> {
     let mut cached:HashMap<LogTreePosition<TL::LogSize>,String>=HashMap::new();
@@ -170,14 +173,14 @@ fn get_proofs<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>,LC: Log
     }
 }
 
-// Hash a given record via its Display instance
+/// Hash a given record via its Serialize instance
 pub fn hash<T:Serialize>(record: &T) -> anyhow::Result<String> {
     let mut hasher = Sha256::new();
     hasher.input(&rmp_serde::to_vec(record)?);
     Ok(hasher.result_str())
 }
 
-// Return the level sizes for each level of the tree
+/// Return the level sizes for each level of the tree
 pub fn tree_sizes<LogSize: Integer + Copy>(size: LogSize) -> Vec<LogSize> {
     let mut v=vec![];
     let mut sz=size;
@@ -200,7 +203,7 @@ pub fn tree_sizes<LogSize: Integer + Copy>(size: LogSize) -> Vec<LogSize> {
     v
 }
 
-// Calculate the proof position needed to assert the record at the given index is present in a log of the given size
+/// Calculate the proof position needed to assert the record at the given index is present in a log of the given size
 pub fn proof_positions<LogSize: Integer + Copy + Hash>(index: LogSize, size: LogSize) -> HashSet<LogTreePosition<LogSize>>{
     let sizes=tree_sizes(size);
     let mut proof=HashSet::new();
@@ -211,7 +214,7 @@ pub fn proof_positions<LogSize: Integer + Copy + Hash>(index: LogSize, size: Log
     proof
 }
 
-// Calculate one level of proof
+/// Calculate one level of proof
 fn proof_step<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, size: LogSize, sizes: &[LogSize], proof: &mut HashSet<LogTreePosition<LogSize>>) {
     let two=LogSize::one().add(LogSize::one());
     if index.mod_floor(&two).is_zero() {
@@ -237,7 +240,7 @@ fn proof_step<LogSize: Integer + Copy + Hash>(level: LogHeight, index: LogSize, 
     }
 }
 
-// Calculate the proof positions needed to assert a tree of size1 is a prefix of a tree of size 2
+/// Calculate the proof positions needed to assert a tree of size1 is a prefix of a tree of size 2
 pub fn prefix_proof_positions<LogSize: Integer + Copy + Hash>(size1: LogSize, size2: LogSize) -> HashSet<LogTreePosition<LogSize>>{
     assert!(size1>LogSize::zero());
     assert!(size1<size2);
@@ -256,7 +259,7 @@ pub fn prefix_proof_positions<LogSize: Integer + Copy + Hash>(size1: LogSize, si
     proof
 }
 
-// Verify that a given record belongs to the given tree, using the proofs provided
+/// Verify that a given record belongs to the given tree, using the proofs provided
 pub fn verify<LogSize: Integer + Copy + Hash>(tree:&LogTree<LogSize>,record:&Record<LogSize>, proofs: &HashMap<LogTreePosition<LogSize>,String>) -> bool {
     let sizes=tree_sizes(tree.size);
     if sizes.is_empty(){
@@ -267,7 +270,7 @@ pub fn verify<LogSize: Integer + Copy + Hash>(tree:&LogTree<LogSize>,record:&Rec
     tree.hash==calc_hash(LogTreePosition{level:sizes.len()-1,index:LogSize::zero()},&proofs2,&sizes)
 }
 
-// Verify that the tree is correct with the proofs provided
+/// Verify that the tree is correct with the proofs provided
 pub fn verify_tree<LogSize: Integer + Copy + Hash>(tree:&LogTree<LogSize>, proofs: &HashMap<LogTreePosition<LogSize>,String>) -> bool {
     let sizes=tree_sizes(tree.size);
     if sizes.is_empty(){
@@ -276,7 +279,7 @@ pub fn verify_tree<LogSize: Integer + Copy + Hash>(tree:&LogTree<LogSize>, proof
     tree.hash==calc_hash(LogTreePosition{level:sizes.len()-1,index:LogSize::zero()},proofs,&sizes)
 }
 
-// Calculate the hash of a given level or index, recursively going down the tree
+/// Calculate the hash of a given level or index, recursively going down the tree
 fn calc_hash<LogSize: Integer + Copy + Hash>(position: LogTreePosition<LogSize>, proofs: &HashMap<LogTreePosition<LogSize>,String>, sizes: &[LogSize]) -> String{
     if position.index<sizes[position.level] {
         if let Some(h) = proofs.get(&position){

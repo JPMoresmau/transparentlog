@@ -1,10 +1,17 @@
 [package]
 name = "transparentlog_rocksdb"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.58.1"
+description = "RocksDB implementation of Transparent Log"
+repository = "https://github.com/JPMoresmau/transparentlog"
+categories = ["data-structures","cryptography::cryptocurrencies","database"]
+keywords = ["distributed","log","merkle"]
+
 
 [dependencies]
-transparentlog_core = { path = "../transparentlog_core" }
+transparentlog_core = { path = "../transparentlog_core", version="0.0.1" }
 rocksdb = "0.18.0"
 serde = {version="1.0.136", features = ["derive"] }
 anyhow = "1.0.53"

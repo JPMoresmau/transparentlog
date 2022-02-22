@@ -1,3 +1,8 @@
+//! # Transparent Log for RocksDB
+//! 
+//! Uses [RocksDB](http://rocksdb.org/) as the storage backend
+//! 
+
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use maybe_owned::MaybeOwned;
 use rocksdb::{DB, ColumnFamilyDescriptor, Options};
@@ -8,7 +13,7 @@ use std::{path::Path, marker::PhantomData};
 const FAMILY_DATA: &'static str = "data";
 const FAMILY_HASH: &'static str = "hash";
 
-// RocksDB implementation of the Transparent log
+/// RocksDB implementation of the Transparent log
 pub struct RocksDBLog<'a, T:Serialize+Deserialize<'a>> {
     db: DB,
     size: u128,
@@ -16,7 +21,7 @@ pub struct RocksDBLog<'a, T:Serialize+Deserialize<'a>> {
 }
 
 impl <'a, T:Serialize+Deserialize<'a>> RocksDBLog<'a, T> {
-    // Open a new or existing database
+    /// Open a new or existing database
     pub fn open<P: AsRef<Path>>(path: &'a P) -> anyhow::Result<Self> {
         let data_cf = ColumnFamilyDescriptor::new(FAMILY_DATA,  Options::default());
         let hash_cf = ColumnFamilyDescriptor::new(FAMILY_HASH,  Options::default());
@@ -39,7 +44,7 @@ impl <'a, T:Serialize+Deserialize<'a>> RocksDBLog<'a, T> {
     }
 }
 
-// Implement TransparentLog API
+/// Implement TransparentLog API
 impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for RocksDBLog<'a,T> {
     type LogSize = u128;
 
