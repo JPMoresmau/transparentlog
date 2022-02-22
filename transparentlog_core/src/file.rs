@@ -1,4 +1,3 @@
-use std::collections::{HashMap};
 use std::marker::PhantomData;
 
 use crypto::digest::Digest;
@@ -52,62 +51,15 @@ impl <'a, T:Serialize+Deserialize<'a>> FileLog<'a, T> {
 
 }
 
-fn push_hash(dir: &Path, hs: &mut Vec<File>, level: LogHeight, hash: &str) ->anyhow::Result<()>{
-
-    if hs.len()<=level{
-        let p = dir.join(format!("hash{}.bin",level));
-        hs.push(OpenOptions::new().append(true).read(true).create(true).open(p)?);
-    }
-    let v=  hs.get_mut(level).unwrap();
-    
-    let b=hash.as_bytes();
-    //println!("Size of array: {}",b.len());
-    v.write_all(b)?;
-    let l = v.metadata()?.len()/b.len() as u64;
-    if l % 2 ==0 {
-        v.seek(SeekFrom::End(- (HASH_SIZE_IN_BYTES as i64)*2))?;
-        let mut b2=[0_u8;HASH_SIZE_IN_BYTES];
-        v.read_exact(&mut b2)?;
-        let mut hasher = Sha256::new();
-        hasher.input_str(&format!("{}{}",String::from_utf8_lossy(&b2),hash));
-        push_hash(dir, hs, level+1, &hasher.result_str())?;
-    }
-    Ok(())
-}
-
 const SZ:u64=std::mem::size_of::<usize>() as u64 + std::mem::size_of::<u64>() as u64;
 
 impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T> {
-    // Vec size
     type LogSize = u64;
-
-    fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>{ 
-        let hash= hash(&record)?;
-       
-        let mut data_file=self.data.borrow_mut();
-        let offset=data_file.metadata()?.len();
-        let data=rmp_serde::to_vec(&record)?;
-        let length=data.len();
-        data_file.seek(SeekFrom::End(0))?;
-        data_file.write_all(&data)?;
-        let mut index_file=self.index.borrow_mut();
-        let id=index_file.metadata()?.len()/SZ;
-        index_file.seek(SeekFrom::End(0))?;
-        index_file.write_all(&offset.to_be_bytes())?;
-        index_file.write_all(&length.to_be_bytes())?;
-
-                
-        let mut hs=self.hashes.borrow_mut();
-        push_hash(self.dir, &mut hs, 0, &hash)?;
-
-        Ok(Record{id,hash})
-    }
-
+    
     fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>> {
         let sz=self.index.borrow().metadata()?.len()/SZ;
         let mut r=vec![];
         for v in self.hashes.borrow_mut().iter_mut().rev(){
-            println!("Size: {}",v.metadata()?.len());
             let len=v.metadata()?.len()/HASH_SIZE_IN_BYTES as u64;
             if len % 2 == 1 {
                 v.seek(SeekFrom::End(- (HASH_SIZE_IN_BYTES as i64)))?;
@@ -146,20 +98,42 @@ impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T>
         Ok(Some(MaybeOwned::Owned(r)))
     }
 
-    fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<LogTreePosition<Self::LogSize>,String>>
-    where I: Iterator<Item=LogTreePosition<Self::LogSize>> {
-        let mut m=HashMap::new();
-        let mut hashes=self.hashes.borrow_mut();
-        for pos in positions {
-            if let Some(f)=hashes.get_mut(pos.level){
-                f.seek(SeekFrom::Start(pos.index*HASH_SIZE_IN_BYTES as u64))?;
-                let mut b=vec![0_u8;HASH_SIZE_IN_BYTES];
-                f.read_exact(&mut b)?;
-                m.insert(pos,String::from_utf8_lossy(&b).into_owned());
-            }
+    fn add(&mut self, record: T) -> anyhow::Result<Self::LogSize> {
+        let mut data_file=self.data.borrow_mut();
+        let offset=data_file.metadata()?.len();
+        let data=rmp_serde::to_vec(&record)?;
+        let length=data.len();
+        data_file.seek(SeekFrom::End(0))?;
+        data_file.write_all(&data)?;
+        let mut index_file=self.index.borrow_mut();
+        let id=index_file.metadata()?.len()/SZ;
+        index_file.seek(SeekFrom::End(0))?;
+        index_file.write_all(&offset.to_be_bytes())?;
+        index_file.write_all(&length.to_be_bytes())?;
+        Ok(id)
+    }
+
+    fn add_hash(&mut self,level: LogHeight, hash: String) -> anyhow::Result<Self::LogSize> {
+        let mut hs=self.hashes.borrow_mut();
+
+        if hs.len()<=level{
+            let p = self.dir.join(format!("hash{}.bin",level));
+            hs.push(OpenOptions::new().append(true).read(true).create(true).open(p)?);
         }
-     
-        Ok(m)
+        let v=  hs.get_mut(level).unwrap();
+        let b=hash.as_bytes();
+        let l = v.metadata()?.len()/HASH_SIZE_IN_BYTES as u64;
+        v.write_all(b)?;
+        Ok(l)
+    }
+
+    fn get_hash(&self, level: LogHeight, index: Self::LogSize) -> anyhow::Result<MaybeOwned<String>> {
+        let mut hs=self.hashes.borrow_mut();
+        let v=  hs.get_mut(level).unwrap();
+        v.seek(SeekFrom::Start((HASH_SIZE_IN_BYTES as u64)*index))?;
+        let mut b2=[0_u8;HASH_SIZE_IN_BYTES];
+        v.read_exact(&mut b2)?;
+        Ok(String::from_utf8_lossy(&b2).into_owned().into())
     }
 }
 

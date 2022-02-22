@@ -27,37 +27,11 @@ impl <T> Default for InMemoryLog<T>{
 }
 
 
-// Internal method
-impl <T> InMemoryLog<T> {
-    fn push_hash(&mut self, level: LogHeight, hash: String){
-        if self.hashes.len()<=level{
-            self.hashes.push(vec![]);
-        }
-        let v=  self.hashes.get_mut(level).unwrap();
-        v.push(hash);
-        let l = v.len();
-        if l % 2 ==0 {
-            let mut hasher = Sha256::new();
-            hasher.input_str(&format!("{}{}",v[l-2],v[l-1]));
-            self.push_hash(level+1, hasher.result_str());
-        }
-    }
-
-}
-
 // TransparentLog Trait implementation for in-memory log
 impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T> {
     // Vec size
     type LogSize = usize;
 
-    fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>{
-        let hash= hash(&record)?;
-        self.data.push(record);
-        
-        self.push_hash(0, hash.clone());
-       
-        Ok(Record{id:self.data.len()-1,hash})
-    }
 
     fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>> {
         let mut r=vec![];
@@ -81,12 +55,23 @@ impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T>
         Ok(self.data.get(index).map(|t| t.into()))
     }
 
-    fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<LogTreePosition<Self::LogSize>,String>>
-    where I: Iterator<Item=LogTreePosition<Self::LogSize>> {
-        Ok(positions.map(|p| {
-            let hash=self.hashes[p.level][p.index].clone();
-            (p,hash)}
-    ).collect())
+    fn add(&mut self, record: T) -> anyhow::Result<Self::LogSize> {
+        let id=self.data.len();
+        self.data.push(record);
+        Ok(id)
+    }
+
+    fn add_hash(&mut self,level: LogHeight, hash: String) -> anyhow::Result<Self::LogSize> {
+        if self.hashes.len()<=level{
+            self.hashes.push(vec![]);
+        }
+        let v=  self.hashes.get_mut(level).unwrap();
+        v.push(hash);
+        Ok(v.len()-1)
+    }
+
+    fn get_hash(&self, level: LogHeight, index: Self::LogSize) -> anyhow::Result<MaybeOwned<String>> {
+         Ok(self.hashes.get(level).unwrap().get(index).unwrap().into())
     } 
 }
 

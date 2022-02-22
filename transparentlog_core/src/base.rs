@@ -1,8 +1,8 @@
-use std::collections::{HashMap,HashSet};
+use std::{collections::{HashMap,HashSet}, ops::Add};
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use maybe_owned::MaybeOwned;
-use num::{Integer,Zero};
+use num::{Integer,Zero, One};
 use std::hash::Hash;
 
 use serde::{Serialize,Deserialize};
@@ -43,8 +43,36 @@ pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
     // The type used to represent the log size
     type LogSize: Integer + Copy + Hash;
 
+    // Add a record, return the record ID
+    fn add(&mut self, record: T) -> anyhow::Result<Self::LogSize>;
+
+    // Add a hash and index, returns the index of the added hash
+    fn add_hash(&mut self,level: LogHeight, hash: String) -> anyhow::Result<Self::LogSize>;
+
+    // Get a hash at the given level and index
+    fn get_hash(&self, level: LogHeight, index: Self::LogSize) -> anyhow::Result<MaybeOwned<String>>;
+
     // Append a new record to the log and return its index
-    fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>;
+    //fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>;
+    fn append(&mut self, record: T) -> anyhow::Result<Record<Self::LogSize>>{
+        let hash= hash(&record)?;
+        let id=self.add(record)?;
+        self.push_hash(0, hash.clone())?;
+        Ok(Record{id,hash})
+    }
+
+    // Recursively push a hash to the tree at given level
+    fn push_hash(&mut self, level: LogHeight, hash: String)-> anyhow::Result<Self::LogSize>{
+        let hid=self.add_hash(level,hash.clone())?;
+        let two=Self::LogSize::one().add(Self::LogSize::one());
+        if hid.mod_floor(&two) == Self::LogSize::one() {
+            let mut hasher = Sha256::new();
+            let hash1=self.get_hash(level,hid-Self::LogSize::one())?;
+            hasher.input_str(&format!("{}{}",hash1,hash));
+            self.push_hash(level+1, hasher.result_str())?;
+        }
+        Ok(hid)
+    }
 
     // Get the latest log size and root hash
     fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>>;
@@ -54,8 +82,18 @@ pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
 
     // Return the requested proofs from the log
     fn proofs<I>(&self, positions: I) -> anyhow::Result<HashMap<LogTreePosition<Self::LogSize>,String>>
-        where I: Iterator<Item=LogTreePosition<Self::LogSize>>;
+        where I: Iterator<Item=LogTreePosition<Self::LogSize>> {
+        positions.map(|p| {
+            let hash=self.get_hash(p.level,p.index)?.into_owned();
+            Ok((p,hash))}
+        ).collect()
+    }
 }
+
+
+
+
+
 
 pub trait LogClient<'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a,T>> {
     fn latest(&self) -> &LogTree<TL::LogSize>;
