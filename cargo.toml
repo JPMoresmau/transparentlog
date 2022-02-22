@@ -1,2 +1,2 @@
 [workspace]
-members = ["transparentlog_core"]
+members = ["transparentlog_core",'transparentlog_rocksdb']

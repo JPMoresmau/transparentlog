@@ -128,9 +128,9 @@ impl <'a, T: Serialize+Deserialize<'a>,TL: TransparentLog<'a, T>> LogClient<'a, 
 #[cfg(test)]
 mod tests {
 
-    use crate::tests::test_verify_tree_prefix;
+    use crate::test_helpers::*;
     use crate::{InMemoryLog, InMemoryLogClientBuilder};
-    use crate::base::tests::*;
+
 
     #[test]
     fn memory_empty() -> anyhow::Result<()>{

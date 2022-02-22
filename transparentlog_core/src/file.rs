@@ -119,9 +119,8 @@ impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T>
 #[cfg(test)]
 mod tests {
 
-    use crate::tests::test_verify_tree_prefix;
     use crate::{FileLog, InMemoryLogClientBuilder};
-    use crate::base::tests::*;
+    use crate::test_helpers::*;
     use std::path::{Path, PathBuf};
     use std::fs::{create_dir, remove_dir_all};
 
