@@ -1,7 +1,5 @@
 use std::collections::{HashMap};
 
-use crypto::digest::Digest;
-use crypto::sha2::Sha256;
 use maybe_owned::MaybeOwned;
 use std::fmt::Debug;
 use serde::{Serialize,Deserialize};
@@ -32,24 +30,10 @@ impl <'a, T: Serialize+Deserialize<'a>> TransparentLog<'a, T> for InMemoryLog<T>
     // Vec size
     type LogSize = usize;
 
-
-    fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>> {
-        let mut r=vec![];
-        for v in self.hashes.iter().rev(){
-            if v.len() % 2 == 1 {
-                r.push(v[v.len()-1].clone());
-            }
-        }
-        while r.len()>1{
-            let s1=r.pop().unwrap();
-            let s2=r.pop().unwrap();
-            let mut hasher = Sha256::new();
-            hasher.input_str(&format!("{}{}",s2,s1));
-            r.push(hasher.result_str());
-        }
-        
-        Ok(LogTree{size:self.data.len(), hash:r.pop().unwrap_or_default()})
+    fn size(&self) -> anyhow::Result<Self::LogSize> {
+        Ok(self.data.len())
     }
+
 
     fn get(&self, index: Self::LogSize) ->anyhow::Result<Option<MaybeOwned<T>>> {
         Ok(self.data.get(index).map(|t| t.into()))

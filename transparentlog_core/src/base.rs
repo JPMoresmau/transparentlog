@@ -74,8 +74,30 @@ pub trait TransparentLog<'a, T: Serialize+Deserialize<'a>> {
         Ok(hid)
     }
 
+    fn size(&self) -> anyhow::Result<Self::LogSize>;
+
     // Get the latest log size and root hash
-    fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>>;
+    fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>>{
+        let sz= self.size()?;
+        let two=Self::LogSize::one().add(Self::LogSize::one());
+        let mut r=vec![];
+
+        for (level,size) in tree_sizes(sz).into_iter().enumerate().rev(){
+            if size.mod_floor(&two) == Self::LogSize::one() {
+                r.push(self.get_hash(level,size-Self::LogSize::one())?)
+            }
+        }
+
+        while r.len()>1{
+            let s1=r.pop().unwrap();
+            let s2=r.pop().unwrap();
+            let mut hasher = Sha256::new();
+            hasher.input_str(&format!("{}{}",s2,s1));
+            r.push(MaybeOwned::Owned(hasher.result_str()));
+        }
+        
+        Ok(LogTree{size:sz, hash:r.pop().unwrap_or_default().into_owned()})
+    }
 
     // Retrieve a log entry by its index
     fn get(&self, index: Self::LogSize) -> anyhow::Result<Option<MaybeOwned<T>>>;

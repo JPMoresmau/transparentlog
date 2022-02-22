@@ -1,12 +1,10 @@
 use std::marker::PhantomData;
 
-use crypto::digest::Digest;
-use crypto::sha2::Sha256;
 use maybe_owned::MaybeOwned;
 use std::fmt::Debug;
 use std::path::Path;
 use std::fs::{File, OpenOptions};
-use std::io::{Result, SeekFrom};
+use std::io::{SeekFrom};
 use std::io::prelude::*;
 use std::cell::RefCell;
 pub use crate::base::*;
@@ -26,7 +24,7 @@ pub struct FileLog<'a, T:Serialize+Deserialize<'a>> {
 }
 
 impl <'a, T:Serialize+Deserialize<'a>> FileLog<'a, T> {
-    pub fn open<P: AsRef<Path>>(dir: &'a P) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(dir: &'a P) -> anyhow::Result<Self> {
         let dir=dir.as_ref();
         let data=OpenOptions::new().read(true).append(true).create(true).open(dir.join("data.bin"))?;
         let index=OpenOptions::new().read(true).append(true).create(true).open(dir.join("index.bin"))?;
@@ -56,27 +54,8 @@ const SZ:u64=std::mem::size_of::<usize>() as u64 + std::mem::size_of::<u64>() as
 impl <'a, T: Serialize+DeserializeOwned> TransparentLog<'a, T> for FileLog<'a,T> {
     type LogSize = u64;
     
-    fn latest(&self) -> anyhow::Result<LogTree<Self::LogSize>> {
-        let sz=self.index.borrow().metadata()?.len()/SZ;
-        let mut r=vec![];
-        for v in self.hashes.borrow_mut().iter_mut().rev(){
-            let len=v.metadata()?.len()/HASH_SIZE_IN_BYTES as u64;
-            if len % 2 == 1 {
-                v.seek(SeekFrom::End(- (HASH_SIZE_IN_BYTES as i64)))?;
-                let mut b2=[0_u8;HASH_SIZE_IN_BYTES];
-                v.read_exact(&mut b2)?;
-                r.push(String::from_utf8_lossy(&b2).into_owned());
-            }
-        }
-        while r.len()>1{
-            let s1=r.pop().unwrap();
-            let s2=r.pop().unwrap();
-            let mut hasher = Sha256::new();
-            hasher.input_str(&format!("{}{}",s2,s1));
-            r.push(hasher.result_str());
-        }
-
-        Ok(LogTree{size:sz,hash:r.pop().unwrap_or_default()})
+    fn size(&self) -> anyhow::Result<Self::LogSize> {
+        Ok(self.index.borrow().metadata()?.len()/SZ)
     }
 
     fn get(&self, index: Self::LogSize) -> anyhow::Result<Option<MaybeOwned<T>>> {
