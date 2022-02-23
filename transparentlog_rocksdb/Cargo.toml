@@ -1,6 +1,6 @@
 [package]
 name = "transparentlog_rocksdb"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.58.1"
@@ -11,10 +11,11 @@ keywords = ["distributed","log","merkle"]
 
 
 [dependencies]
-transparentlog_core = { path = "../transparentlog_core", version="0.0.1" }
+transparentlog_core = { path = "../transparentlog_core", version="0.0.2" }
 rocksdb = "0.18.0"
 serde = {version="1.0.136", features = ["derive"] }
 anyhow = "1.0.53"
+thiserror = "1.0.30"
 maybe-owned = "0.3.4"
 byteorder = "1.4.3"
 rmp = "^0.8"
